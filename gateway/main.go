@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"time"
 	"net"
-	"strconv"
 	"container/heap"
 )
 
@@ -19,16 +18,18 @@ var mutex sync.Mutex
 
 type registered_server struct {
 	URL string `json:"url"`
-	Port int `json:"port"`
+	Port string `json:"port"`
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         start := time.Now()
 
-        fmt.Printf("[%s] %s %s\n", start.Format("15:04"), r.Method, r.URL.Path)
+        log.Printf("[%s] %s %s\n", start.Format("15:04"), r.Method, r.URL.Path)
 
         next.ServeHTTP(w, r) // Call the actual handler
+
+		log.Printf("[%s] %s %s Done\n", start.Format("15:04"), r.Method, r.URL.Path)
     })
 }
 
@@ -64,7 +65,7 @@ func rate_limiter(request *http.Request) bool {
 			}
 		}
 		value.PushBack(client_time)
-		if value.Len() >= 15{
+		if value.Len() >= 35{
 			return false
 		}
 	}
@@ -88,7 +89,10 @@ func echoHandler(initial_response http.ResponseWriter, initial_request *http.Req
 
 	// Calls a function that returns which endpoints are available to use. 
 	// BTS it keeps checking and updating the available endpoints
-	// server := get_next_server()
+	if len(sh) == 0 {
+		http.Error(initial_response, "No upstream servers available", http.StatusServiceUnavailable)
+		return
+	}
 	server := sh[0]
 	url := server.URL+"/echo"
 	server.mu.Lock()
@@ -134,32 +138,31 @@ func registerServer(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		http.Error(w, "Could not read server JSON", http.StatusBadRequest)
 	}
-	UID := strconv.Itoa(server.Port)
 	var url string
-	var port int
+	var port string
 
 	url = server.URL
 	port = server.Port
 	if err != nil{
-		fmt.Println("Errored out during reading of port.")
+		log.Println("Errored out during reading of port.")
+		return
 	}
 
-	_,exists := servers[UID]
+	_,exists := servers[port]
 	if exists{
 		http.Error(w, "Server already added", http.StatusConflict)
 		return
 	}
 
-	servers[UID] = &server_struct{
+	servers[port] = &server_struct{
 		URL: url,
 		alive: true,
 		last_updated: time.Now().Unix(),
 		port: port,
-		UID: UID,
 	}
-	heap.Push(&sh, servers[UID])	// Add to heap as well
+	heap.Push(&sh, servers[port])	// Add to heap as well
 
-	log.Printf("Server URL : %s port: %s connected successfully", url, strconv.Itoa(port))
+	log.Printf("Server URL : %s port: %s connected successfully", url, port)
 	w.WriteHeader(http.StatusOK)	// Sends the status code back to client
 	fmt.Fprintf(w, "Server %s connected successfully", req.RemoteAddr)
 }
@@ -172,20 +175,20 @@ func exitServer(w http.ResponseWriter, req *http.Request){
 
 	body, err := io.ReadAll(req.Body)	//body is of type bytes
 	if err != nil{
-		http.Error(w, "Failed to read the UID", http.StatusBadRequest)
+		http.Error(w, "Failed to read the Port", http.StatusBadRequest)
 		return
 	}
 
-	server, exists := servers[string(body)]
+	server, exists := servers[string(body)]	// TODO Fails here. Searching based on port but key is UID
 	if !exists || !remove_server(server) {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "Server %s could not be found", req.RemoteAddr)
-		log.Printf("Server %s could not be found", req.RemoteAddr)
+		fmt.Fprintf(w, "Server %s could not be found", string(body))
+		log.Printf("Server %s could not be found", string(body))
 		return
 	}
-	log.Printf("Removed server %s", req.RemoteAddr)
+	log.Printf("Removed server with port %s", string(body))
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Removed server %s", req.RemoteAddr)
+	fmt.Fprintf(w, "Removed server with port %s", string(body))
 }
 
 func main() {
@@ -201,8 +204,8 @@ func main() {
 	
 	loggedMux := loggingMiddleware(mux)
 	go start_heartbeat()	// Start heartbeat service in the background
-	log.Println("Server starting on port 8081")
-	err := http.ListenAndServe(":8081", loggedMux)	// blocks and runs indefinitely
+	log.Println("Server starting on port 8080")
+	err := http.ListenAndServe(":8080", loggedMux)	// blocks and runs indefinitely
 	if err != nil {
 		log.Println("There was an error starting the server", err)
 	}

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"encoding/json"
 	"syscall"
 	"time"
@@ -16,7 +15,7 @@ import (
 
 type registered_server struct {
 	URL string `json:"url"`
-	Port int `json:"port"`
+	Port string `json:"port"`
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
@@ -48,10 +47,10 @@ func echoHandler(resp http.ResponseWriter, request *http.Request) {
 	fmt.Fprint(resp, string(body))
 }
 
-func register_server(server_port int) bool{
+func register_server(server_port string) bool{
 	server_details := &registered_server{
 		Port: server_port,
-		URL: "http://localhost:"+strconv.Itoa(server_port),
+		URL: "http://localhost:"+server_port,
 	}
 	server_json, _ := json.Marshal(server_details)
 	resp, err := http.Post("http://localhost:8080/registerServer", "application/json", bytes.NewBuffer(server_json))
@@ -68,9 +67,9 @@ func register_server(server_port int) bool{
 	return true
 }
 
-func exit_gateway(server_port int) {
+func exit_gateway(server_port string) {
 	log.Println("Control-c detected turning off system.")
-	resp, err := http.Post("http://localhost:8080/exit", "text/plain", bytes.NewBuffer([]byte(strconv.Itoa(server_port))))
+	resp, err := http.Post("http://localhost:8080/exit", "text/plain", bytes.NewBuffer([]byte(server_port)))
 	if err != nil {
 		log.Fatal("Could not exit out of gateway cleanly.")
 	}
@@ -89,7 +88,7 @@ func main() {
 	signal_shutdown := make(chan os.Signal, 1)
 	signal.Notify(signal_shutdown, os.Interrupt, syscall.SIGTERM)	// Setting all triggers for a shutdown.
 
-	server_port := 8082
+	server_port := "8082"
 	if !register_server(server_port){
 		log.Printf("[WARNING] Could not register server.")
 		os.Exit(1) 
@@ -109,8 +108,9 @@ func main() {
     mux.HandleFunc("/echo", echoHandler)
 	mux.HandleFunc("/health", healthCheck)
 	loggedMux := loggingMiddleware(mux)
-	log.Println("Server starting on port 8082")
-	err := http.ListenAndServe(":8082", loggedMux)	// blocks and runs indefinitely
+	log.Printf("Server starting on port %s", server_port)
+	addr := fmt.Sprintf(":%s", server_port)
+	err := http.ListenAndServe(addr, loggedMux)	// blocks and runs indefinitely
 	if err != nil {
 		fmt.Println("There was an error starting the server", err)
 	}

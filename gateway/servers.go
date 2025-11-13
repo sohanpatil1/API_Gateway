@@ -12,16 +12,15 @@ import (
 
 type server_struct struct {
 	URL string
-	port int
-	alive bool
-	last_updated int64
+	port string
 	mu sync.RWMutex
 	in_queue int
-	UID string
 	index int
+	alive bool
+	last_updated int64
 }
 
-var servers = make(map[string]*server_struct)	//string UID and value is servers struct
+var servers = make(map[string]*server_struct)	//string port and value is servers struct
 
 // Heap for queue
 type ServerHeap []*server_struct // Get the server with the lowest load (queue)
@@ -38,11 +37,13 @@ func (sh *ServerHeap) Push(element any){
 	*sh = append(*sh, element.(*server_struct))
 }
 func (sh *ServerHeap) Pop() any {
+	// Internally the first element is swapped with the last one. We need the last element and heapify the first n-1
 	old_heap := *sh
-	old_len := len(old_heap)
-	popped_element := old_heap[old_len-1]
-	*sh = old_heap[0 : old_len-1]
-	return popped_element
+	n := len(old_heap)
+	x := old_heap[n-1]
+	x.index = -1 // mark as removed
+	*sh = old_heap[0 : n-1]
+	return x
 }
 
 var sh ServerHeap //Actual global variable
@@ -56,31 +57,23 @@ func isAlive(url string, port int) bool{
 	return true
 }
 
-func get_next_server() *server_struct{
-	if sh.Len() == 0{
-		return nil
-	}
-	server := heap.Pop(&sh).(*server_struct)
-	return server
-}
-
 func remove_server(server *server_struct) bool {
 	// Remove from heap
 	found := false
 	for index, s := range(sh) {
-		if s.UID == server.UID {
+		if s.port == server.port {
 			heap.Remove(&sh, index)
 			found = true
 			break
 		}
 	}
 	// Remove from map
-	if _, ok := servers[server.UID]; ok {
-		delete(servers, server.UID)
+	if _, ok := servers[server.port]; ok {
+		delete(servers, server.port)
 		found = true
 	}
 	if found {
-		log.Printf("Deleted server %s cleanly", server.UID)
+		log.Printf("Deleted server %s cleanly", server.port)
 		return true
 	}
 
@@ -91,15 +84,15 @@ func start_heartbeat() {
 	for {
 		for UID, server := range servers {
 			fmt.Println("Found server " + UID)
-			server.mu.Lock()
-			if isAlive(UID, server.port){
-				server.alive = true
-			} else{
-				// TODO set it on the mock_api side too
-				server.alive = false
-			}
+			// server.mu.Lock()
+			// if isAlive(UID, server.port){
+			// 	server.alive = true
+			// } else{
+			// 	// TODO set it on the mock_api side too
+			// 	server.alive = false
+			// }
 			server.last_updated = time.Now().Unix()
-			server.mu.Unlock()
+			// server.mu.Unlock()
 		}
 		log.Println("Heartbeat check done")
 		time.Sleep(5*time.Second)

@@ -1,3 +1,5 @@
+// mock_client
+
 package main
 
 import (
@@ -16,15 +18,15 @@ func main() {
 		go func(){
 			defer wg.Done()
 			body := fmt.Sprintf("%d", i)
-			resp,err := http.Post("http://localhost:8081/echo", "text/plain", bytes.NewBuffer([]byte(body)))
+			resp,err := http.Post("http://localhost:8080/echo", "text/plain", bytes.NewBuffer([]byte(body)))
 			if err != nil {
-				log.Printf("Request failed to even connect: %v", err)
+				log.Printf("Cannot connect to 8080: %v",err)
+				return
 			}
-			respBody, err := io.ReadAll((resp.Body))
-			log.Printf(string(respBody))
+			respBody, _ := io.ReadAll((resp.Body))
+			log.Printf("%s", respBody)
 			resp.Body.Close()	// Need to close this once done
 		}()
 	}
 	wg.Wait()
-
 }	
