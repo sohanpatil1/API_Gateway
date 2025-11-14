@@ -41,6 +41,7 @@ func initTracer(service_name string) (*sdktrace.TracerProvider, error) {
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
+	    sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 
 	// tp is made as a global tracer

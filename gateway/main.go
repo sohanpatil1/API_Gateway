@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 )
 
 var rate_limiting_cache = make(map[string]*list.List)
@@ -108,11 +109,16 @@ func echoHandler(initial_response http.ResponseWriter, initial_request *http.Req
 	
 	// Adding outbound actions for tracing
 	log.Printf("Gateway making a Post call to %s", url)
+	ctx := initial_request.Context()
+	tr := otel.Tracer("gateway")
+	ctx, span := tr.Start(ctx, "forward_to_app_server")
+	defer span.End()
+
 	// response, err := http.Post(url, "text/plain", bytes.NewBuffer(body))	// bytes not allowed, need io.Reader
 	client := http.Client{
 		Transport: otelhttp.NewTransport(http.DefaultTransport),	// Injects trace headers
 	}
-	req,err := http.NewRequestWithContext(initial_request.Context(), "POST", url, bytes.NewBuffer(body))
+	req,err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
 	if err != nil{
 		http.Error(initial_response, err.Error(), http.StatusBadGateway)
 		return
@@ -249,10 +255,10 @@ func main() {
 
 	heap.Init(&sh)
 	
-	loggedMux := loggingMiddleware(mux)
+	wrapped := otelhttp.NewHandler(loggingMiddleware(mux), "gateway-root")
 	go start_heartbeat()	// Start heartbeat service in the background
 	log.Println("Server starting on port 8080")
-	err = http.ListenAndServe(":8080", loggedMux)	// blocks and runs indefinitely
+	err = http.ListenAndServe(":8080", wrapped) // blocked until done
 	if err != nil {
 		log.Println("There was an error starting the server", err)
 	}

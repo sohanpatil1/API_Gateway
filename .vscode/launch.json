@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Gateway",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/gateway",
+            "args": [],
+            "env": {},
+            "buildFlags": "",
+            "cwd": "${workspaceFolder}/gateway"
+        },
+        {
+            "name": "Launch Server",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${workspaceFolder}/app_server",
+            "args": [],
+            "env": {},
+            "buildFlags": "",
+            "cwd": "${workspaceFolder}/app_server"
+        }
+    ]
+}

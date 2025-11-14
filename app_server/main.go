@@ -129,10 +129,10 @@ func main() {
 			"app_server-healthCheck",
 		),
 	)	// Function that runs when endpoint is reached
-	loggedMux := loggingMiddleware(mux)
+	wrapped := otelhttp.NewHandler(loggingMiddleware(mux), "gateway-root")
 	log.Printf("Server starting on port %s", server_port)
 	addr := fmt.Sprintf(":%s", server_port)
-	err = http.ListenAndServe(addr, loggedMux)	// blocks and runs indefinitely
+	err = http.ListenAndServe(addr, wrapped)	// blocks and runs indefinitely
 	if err != nil {
 		fmt.Println("There was an error starting the server", err)
 	}
