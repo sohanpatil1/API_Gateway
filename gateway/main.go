@@ -1,20 +1,24 @@
 package main
+
 import (
+	"bytes"
+	"container/heap"
+	"container/list"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"bytes"
 	"log"
-	"container/list"
-	"sync"
-	"encoding/json"
-	"time"
 	"net"
-	"container/heap"
+	"net/http"
+	"sync"
+	"time"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var rate_limiting_cache = make(map[string]*list.List)
-var mutex sync.Mutex
+var rate_limiting_mutex sync.Mutex
+var server_heap_mutex sync.Mutex
 
 type registered_server struct {
 	URL string `json:"url"`
@@ -40,8 +44,8 @@ func rate_limiter(request *http.Request) bool {
 		client_ip = request.RemoteAddr
 	}
 	var client_time = time.Now()
-	mutex.Lock()
-	defer mutex.Unlock()
+	rate_limiting_mutex.Lock()
+	defer rate_limiting_mutex.Unlock()
 	value, exists := rate_limiting_cache[client_ip]
 	if !exists {
 		new_list := list.New()
@@ -97,16 +101,32 @@ func echoHandler(initial_response http.ResponseWriter, initial_request *http.Req
 	url := server.URL+"/echo"
 	server.mu.Lock()
 	server.in_queue ++
+	server_heap_mutex.Lock()
 	heap.Fix(&sh, server.index)
+	server_heap_mutex.Unlock()
 	server.mu.Unlock()
-	// Post is a blocking call, make it async
+	
+	// Adding outbound actions for tracing
 	log.Printf("Gateway making a Post call to %s", url)
-	response, err := http.Post(url, "text/plain", bytes.NewBuffer(body))	// bytes not allowed, need io.Reader
+	// response, err := http.Post(url, "text/plain", bytes.NewBuffer(body))	// bytes not allowed, need io.Reader
+	client := http.Client{
+		Transport: otelhttp.NewTransport(http.DefaultTransport),	// Injects trace headers
+	}
+	req,err := http.NewRequestWithContext(initial_request.Context(), "POST", url, bytes.NewBuffer(body))
+	if err != nil{
+		http.Error(initial_response, err.Error(), http.StatusBadGateway)
+		return
+	} 
+	req.Header.Set("Content-Type", "text/plain")
+	
+	response, err := client.Do(req)	// Actually making an API call. Call details stored in req
 	if err != nil{
 		http.Error(initial_response, err.Error(), http.StatusBadGateway)
 		return
 	} 
 	defer response.Body.Close()
+
+
 	log.Println("Response status: ", response.Status)
 	
 	if response.StatusCode != http.StatusOK {
@@ -130,7 +150,7 @@ func echoHandler(initial_response http.ResponseWriter, initial_request *http.Req
 
 func registerServer(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost{
-		http.Error(w, "Did not use the right method. Use Get", http.StatusBadRequest)
+		http.Error(w, "Did not use the right method. Use Post", http.StatusBadRequest)
 		return
 	}
 	var server registered_server
@@ -160,7 +180,9 @@ func registerServer(w http.ResponseWriter, req *http.Request) {
 		last_updated: time.Now().Unix(),
 		port: port,
 	}
+	server_heap_mutex.Lock()
 	heap.Push(&sh, servers[port])	// Add to heap as well
+	server_heap_mutex.Unlock()
 
 	log.Printf("Server URL : %s port: %s connected successfully", url, port)
 	w.WriteHeader(http.StatusOK)	// Sends the status code back to client
@@ -194,18 +216,43 @@ func exitServer(w http.ResponseWriter, req *http.Request){
 func main() {
 	log.SetFlags(log.Ltime | log.Lshortfile)
 	log.Println("This is the gateway module")
+
+	// Open telemetry
+	tp, err := initTracer("api_gateway")
+	if err != nil {
+		log.Fatalln("Could not start open telemetry")
+	}
+	defer shutdownTracer(tp, context.Background())
 	
+	// This creates a root span
 	mux := http.NewServeMux()
-    mux.HandleFunc("/echo", echoHandler)	// Function that runs when endpoint is reached
-	mux.HandleFunc("/registerServer", registerServer)
-	mux.HandleFunc("/exit", exitServer)
+    mux.Handle("/echo", 
+		otelhttp.NewHandler(
+			http.HandlerFunc(echoHandler),
+			"echo-gateway-handler",
+		),
+	)	// Function that runs when endpoint is reached
+
+	mux.Handle("/registerServer", 
+		otelhttp.NewHandler(
+			http.HandlerFunc(registerServer),
+			"register-server",
+		),
+	)
+
+	mux.Handle("/exit", 
+		otelhttp.NewHandler(
+			http.HandlerFunc(exitServer),
+			"exit-server",
+		),
+	)
 
 	heap.Init(&sh)
 	
 	loggedMux := loggingMiddleware(mux)
 	go start_heartbeat()	// Start heartbeat service in the background
 	log.Println("Server starting on port 8080")
-	err := http.ListenAndServe(":8080", loggedMux)	// blocks and runs indefinitely
+	err = http.ListenAndServe(":8080", loggedMux)	// blocks and runs indefinitely
 	if err != nil {
 		log.Println("There was an error starting the server", err)
 	}

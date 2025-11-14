@@ -2,15 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"encoding/json"
 	"syscall"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type registered_server struct {
@@ -103,15 +106,34 @@ func main() {
 	}()
 
 
+	// Opentelemetry start and shutdown
+	tp, err := initTracer("app_server3")
+	if err != nil {
+		log.Fatalf("Could not start tracer: %v", err)
+	}
+	
+	defer shutdownTracer(tp, context.Background())
+
 	log.Printf("Registered the server")
 	mux := http.NewServeMux()
-    mux.HandleFunc("/echo", echoHandler)
-	mux.HandleFunc("/health", healthCheck)
+    mux.Handle("/echo", 
+		otelhttp.NewHandler(
+			http.HandlerFunc(echoHandler),
+			"echo-app_server-handler",
+		),
+	)	// Function that runs when endpoint is reached
+
+	mux.Handle("/health", 
+		otelhttp.NewHandler(
+			http.HandlerFunc(healthCheck),
+			"app_server-healthCheck",
+		),
+	)	// Function that runs when endpoint is reached
 	loggedMux := loggingMiddleware(mux)
 	
 	log.Printf("Server starting on port %s", server_port)
 	addr := fmt.Sprintf(":%s", server_port)
-	err := http.ListenAndServe(addr, loggedMux)	// blocks and runs indefinitely
+	err = http.ListenAndServe(addr, loggedMux)	// blocks and runs indefinitely
 	if err != nil {
 		fmt.Println("There was an error starting the server", err)
 	}
